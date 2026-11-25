@@ -1,0 +1,444 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>로봇청소기 오도메트리 시뮬레이터</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@500;600&family=Noto+Sans+KR:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+/* VOICE: 차분하고 정밀한 공학 교육 도구
+   IDEA: 로봇 관제 모니터 - 큰 주행 화면 하나와 계기판 스트립
+   PICTURE: 바닥 격자 위 로봇청소기, 순간중심(ICR)과 속도 벡터, 실제 vs 추정 궤적
+   COLOUR and TYPE: 어두운 강철 패널, 청록=실제, 코랄=추정, 경보 빨강=ICR, 파랑=속도 / Inter Tight + Noto Sans KR
+   LAYOUT: 왼쪽 시뮬레이션, 오른쪽 제어 패널, 아래 계산 흐름, 오차 그래프, 원리 */
+:root,:root[data-theme=light],:root[data-theme=dark]{color-scheme:dark}
+:root{--bg:#16191c;--p1:#1d2125;--p2:#252a2f;--ln:#323940;--ink:#eef1f3;--mut:#9ba5ae;--tru:#4fc1b0;--est:#ff8a5c;--icr:#ff4a3d;--vel:#86b6ff;--st:#d5dbe0;--hv:#c79bff}
+*{box-sizing:border-box;min-width:0}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.6 "Noto Sans KR",system-ui,sans-serif;overflow-x:clip}
+h1,h2,h3{font-family:"Inter Tight","Noto Sans KR",sans-serif;font-weight:600;margin:0;line-height:1.2}
+h1{font-size:clamp(26px,3.4vw,38px);line-height:1.08;text-wrap:balance}
+h2{font-size:18px;margin-bottom:10px}
+.top{padding:26px max(3vw,16px) 18px;border-bottom:1px solid var(--ln);display:flex;flex-wrap:wrap;gap:12px 32px;align-items:flex-end;justify-content:space-between;max-width:1500px;margin:0 auto}
+.top p{margin:8px 0 0;color:var(--mut);max-width:68ch}
+.tags{display:flex;flex-wrap:wrap;gap:8px}
+.tag{border:1px solid var(--ln);border-radius:999px;padding:4px 12px;font-size:13px;color:var(--st)}
+.app{display:grid;gap:16px;padding:16px max(2vw,12px) 48px;grid-template-columns:minmax(0,1fr) 340px;grid-template-areas:"stage ctrl" "flow ctrl" "err ctrl" "th th";max-width:1500px;margin:0 auto}
+@media(max-width:1100px){.app{grid-template-columns:minmax(0,1fr);grid-template-areas:"stage" "ctrl" "flow" "err" "th"}}
+.card{background:var(--p1);border:1px solid var(--ln);border-radius:12px;padding:16px}
+.stage{grid-area:stage;padding:0;overflow:hidden}
+.fig{position:relative;height:clamp(340px,60vh,640px)}
+.fig canvas{position:absolute;inset:0;width:100%;height:100%;touch-action:none;cursor:grab}
+.hud{position:absolute;left:12px;top:12px;background:rgba(22,25,28,.9);border:1px solid var(--ln);border-radius:10px;padding:8px 12px;font-size:13px;display:grid;grid-template-columns:auto auto;gap:1px 14px;pointer-events:none;color:var(--mut)}
+.hud b{font-family:"Inter Tight","Noto Sans KR",sans-serif;font-weight:600;font-variant-numeric:tabular-nums;text-align:right;color:var(--ink);white-space:nowrap}
+.tools{position:absolute;right:12px;top:12px;display:flex;gap:6px}
+.tools button{min-width:40px;background:rgba(37,42,47,.92)}
+.legend{position:absolute;left:12px;bottom:30px;display:flex;flex-wrap:wrap;gap:4px 14px;font-size:13px;background:rgba(22,25,28,.88);padding:5px 10px;border-radius:8px;pointer-events:none;max-width:calc(100% - 24px)}
+.sw{display:inline-block;width:18px;height:0;border-top:3px solid;vertical-align:middle;margin-right:6px}
+.dot{display:inline-block;width:10px;height:10px;border-radius:50%;vertical-align:middle;margin-right:6px}
+@media(max-width:600px){.hud{font-size:13px;padding:6px 8px}.legend{display:none}.tools{top:auto;bottom:28px}}
+.play{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:10px 12px;border-top:1px solid var(--ln)}
+.play input[type=range]{flex:1 1 200px}
+button,select{font:inherit;font-size:14px;color:var(--ink);background:var(--p2);border:1px solid var(--ln);border-radius:8px;min-height:40px;padding:0 12px;cursor:pointer}
+button:hover,select:hover{border-color:#4d565f}
+:focus-visible{outline:2px solid var(--vel);outline-offset:2px}
+.pri{background:var(--tru);color:#08211d;border-color:var(--tru);font-weight:600;min-width:88px}
+.time{font-variant-numeric:tabular-nums;color:var(--mut);font-size:14px;white-space:nowrap}
+.ctrl{grid-area:ctrl;display:flex;flex-direction:column;gap:16px;align-self:start}
+.ctrl h2{font-size:16px;margin-bottom:8px}
+.chips{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.chip{text-align:left;padding:0 10px}
+.chip.on{border-color:var(--tru);background:rgba(79,193,176,.15);color:#c4f1ea}
+.desc{font-size:13px;color:var(--mut);margin:8px 0 0}
+.note{font-size:13px;color:#ffcdb9;background:rgba(255,138,92,.1);border-radius:8px;padding:6px 10px;margin:8px 0 0}
+.row{margin-top:12px}
+.row label{display:block;font-size:14px;margin-bottom:2px}
+.pair{display:grid;grid-template-columns:minmax(0,1fr) 80px 40px;gap:8px;align-items:center}
+.u{font-size:13px;color:var(--mut)}
+input[type=number]{font:inherit;font-size:16px;width:100%;background:var(--bg);color:var(--ink);border:1px solid var(--ln);border-radius:8px;padding:5px 8px;font-variant-numeric:tabular-nums}
+input[type=range]{accent-color:var(--tru);width:100%;height:30px;margin:0}
+select{width:100%}
+.tog{display:grid;grid-template-columns:1fr 1fr;gap:0 10px;font-size:14px}
+.tog label{display:flex;align-items:center;gap:8px;min-height:38px;cursor:pointer}
+.tog input{accent-color:var(--tru);width:18px;height:18px;margin:0}
+.flow{grid-area:flow}
+.steps{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+@media(max-width:760px){.steps{grid-template-columns:minmax(0,1fr)}}
+.step{background:var(--p2);border-radius:10px;padding:12px 14px;font-size:14px}
+.step h3{font-size:15px;margin-bottom:2px}
+.step .tg{font-size:13px;color:var(--mut);margin:0 0 6px}
+.eq{margin:4px 0;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+.eq b{color:#fff;font-weight:600}
+.sm{margin:6px 0 0;font-size:13px;color:var(--mut)}
+.r{color:var(--icr)}
+.err{grid-area:err}
+.elg{display:flex;flex-wrap:wrap;gap:4px 18px;font-size:13px;color:var(--mut);margin-bottom:6px}
+.efig{position:relative;height:220px}
+.efig canvas{position:absolute;inset:0;width:100%;height:100%}
+table{width:100%;border-collapse:collapse;font-size:14px;margin-top:12px;font-variant-numeric:tabular-nums}
+th,td{padding:7px 8px;border-bottom:1px solid var(--ln);text-align:right;white-space:nowrap}
+th:first-child,td:first-child{text-align:left}
+thead th{color:var(--mut);font-weight:500}
+.scroll{overflow-x:auto}
+.th{grid-area:th}
+.th p,.th li{color:#d6dce1;max-width:78ch}
+details{border-top:1px solid var(--ln);padding:6px 0}
+summary{cursor:pointer;font-weight:600;min-height:40px;display:flex;align-items:center}
+.foot{font-size:13px;color:var(--mut);margin-top:12px}
+</style>
+</head>
+<body>
+<header class="top">
+  <div>
+    <h1>로봇청소기 오도메트리 시뮬레이터</h1>
+    <p>두 바퀴 속도만으로 움직임을 계산하는 차동구동 로봇. 동역학 5장의 상대속도와 순간중심(ICR)으로 로봇이 자기 위치를 추정하는 과정과, 그 추정이 왜 점점 틀어지는지 보여줘요.</p>
+  </div>
+  <div class="tags"><span class="tag">5.2 회전</span><span class="tag">5.4 상대속도</span><span class="tag">5.5 순간중심</span><span class="tag">오도메트리</span></div>
+</header>
+
+<main class="app">
+  <section class="card stage" aria-label="시뮬레이션 화면">
+    <div class="fig">
+      <canvas id="cv" aria-label="로봇 주행 시뮬레이션"></canvas>
+      <div class="hud" id="hud"></div>
+      <div class="tools">
+        <button id="zin" aria-label="확대">+</button>
+        <button id="zout" aria-label="축소">−</button>
+        <button id="fitb">화면 맞춤</button>
+      </div>
+      <div class="legend">
+        <span><i class="sw" style="color:var(--tru)"></i>실제 경로</span>
+        <span><i class="sw" style="color:var(--est);border-top-style:dashed"></i>추정 경로</span>
+        <span><i class="dot" style="background:var(--icr)"></i>순간중심 ICR</span>
+        <span><i class="sw" style="color:var(--vel)"></i>속도 벡터</span>
+      </div>
+    </div>
+    <div class="play">
+      <button id="b0" aria-label="처음으로">⏮</button>
+      <button id="bm" aria-label="한 스텝 뒤로">◀ 스텝</button>
+      <button id="bp" class="pri">▶ 재생</button>
+      <button id="bf" aria-label="한 스텝 앞으로">스텝 ▶</button>
+      <select id="spd" aria-label="재생 속도" style="width:auto">
+        <option value="0.25">0.25×</option><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option><option value="8">8×</option>
+      </select>
+      <input type="range" id="scrub" min="0" max="1000" value="0" aria-label="시간 이동">
+      <span class="time" id="time"></span>
+    </div>
+  </section>
+
+  <aside class="ctrl">
+    <div class="card">
+      <h2>주행 시나리오</h2>
+      <div class="chips" id="chips"></div>
+      <p class="desc" id="pdesc"></p>
+      <div id="g-drive"></div>
+      <p class="note" id="pnote">프리셋 실행 중: ω 값은 현재 명령을 보여줘요. 슬라이더를 움직이면 직접 입력으로 바뀌어요.</p>
+    </div>
+    <div class="card"><h2>로봇 제원</h2><div id="g-robot"></div></div>
+    <div class="card"><h2>오차 요인</h2><p class="desc" style="margin:0">로봇 소프트웨어는 이 오차들을 모르고 공칭값으로 계산해요.</p><div id="g-err"></div></div>
+    <div class="card"><h2>오도메트리 계산</h2>
+      <div class="row"><label for="meth">적분 방법</label>
+        <select id="meth"><option value="euler">오일러 (현재 방향으로 직선 이동)</option><option value="mid">중점법 RK2 (θ + Δθ/2 방향)</option><option value="exact">원호 적분 (ICR 중심 원호)</option></select></div>
+      <div id="g-odo"></div>
+    </div>
+    <div class="card"><h2>화면 표시</h2>
+      <div class="tog" id="tog">
+        <label><input type="checkbox" data-k="icr">순간중심 ICR</label>
+        <label><input type="checkbox" data-k="vel">속도 벡터</label>
+        <label><input type="checkbox" data-k="dist">속도 분포선</label>
+        <label><input type="checkbox" data-k="err">오차선</label>
+        <label><input type="checkbox" data-k="tru">실제 경로</label>
+        <label><input type="checkbox" data-k="est">추정 경로</label>
+        <label><input type="checkbox" data-k="prev">전체 경로 미리보기</label>
+        <label><input type="checkbox" data-k="follow" id="t-follow">로봇 따라가기</label>
+      </div>
+      <p class="desc">화면 드래그로 이동, 휠 또는 +/− 로 확대, 더블클릭으로 화면 맞춤. 스페이스바 재생, ←/→ 스텝.</p>
+    </div>
+  </aside>
+
+  <section class="card flow">
+    <h2>계산 흐름: 지금 이 순간의 값 대입</h2>
+    <div class="steps" id="steps"></div>
+  </section>
+
+  <section class="card err">
+    <h2>실제 위치 vs 로봇이 믿는 위치</h2>
+    <div class="elg"><span><i class="sw" style="color:var(--ink)"></i>위치 오차 (cm, 왼쪽 축)</span><span><i class="sw" style="color:var(--hv)"></i>방향 오차 크기 (°, 오른쪽 축)</span></div>
+    <div class="efig"><canvas id="ec" aria-label="오차 그래프"></canvas></div>
+    <div class="scroll"><table><thead><tr><th></th><th>실제 (마지막 갱신 시점)</th><th>추정 (오도메트리)</th><th>차이</th></tr></thead><tbody id="cmp"></tbody></table></div>
+  </section>
+
+  <section class="card th">
+    <h2>핵심 원리</h2>
+    <details open><summary>1. 로봇청소기 = 강체 하나 (5.1, 5.2)</summary>
+      <p>몸체와 두 바퀴 축은 하나의 강체예요. 두 바퀴 속도가 같으면 병진(직진), 반대면 중심을 축으로 한 고정축 회전(제자리 회전), 그 밖에는 병진과 회전이 섞인 일반평면운동이에요. 바퀴가 미끄러지지 않으면 바퀴 축 위 점의 속도는 v = rω (구름 조건)이에요.</p></details>
+    <details><summary>2. 상대속도로 ω와 v<sub>C</sub> 구하기 (5.4)</summary>
+      <p>왼쪽 바퀴 점 L과 오른쪽 바퀴 점 R은 같은 강체 위 두 점이라 v<sub>R</sub> = v<sub>L</sub> + ω × r<sub>R/L</sub>, |r<sub>R/L</sub>| = L이에요. 바퀴 속도는 둘 다 진행 방향(바퀴 축에 수직)이라 스칼라로 쓰면 v<sub>R</sub> = v<sub>L</sub> + ωL이고, 따라서 ω = (v<sub>R</sub> − v<sub>L</sub>)/L, 중심 속도 v<sub>C</sub> = (v<sub>L</sub> + v<sub>R</sub>)/2예요.</p></details>
+    <details><summary>3. 순간중심 ICR은 바퀴 축 연장선 위에 있어요 (5.5)</summary>
+      <p>각 바퀴에서 속도에 수직인 선은 둘 다 바퀴 축선 하나로 겹쳐요. 그래서 교점 대신 슬라이드 p.14 (b), (c)처럼 두 속도 화살표 끝을 이은 선이 축선과 만나는 점이 ICR이에요. 거리는 R = v<sub>C</sub>/ω = (L/2)(v<sub>R</sub> + v<sub>L</sub>)/(v<sub>R</sub> − v<sub>L</sub>)이에요.</p>
+      <div class="scroll"><table><thead><tr><th>바퀴 입력</th><th>ICR 위치</th><th>운동</th></tr></thead><tbody>
+        <tr><td>ω<sub>L</sub> = ω<sub>R</sub></td><td>무한원점 (ω = 0)</td><td>순수 병진, 직진</td></tr>
+        <tr><td>ω<sub>L</sub> = −ω<sub>R</sub></td><td>로봇 중심 (R = 0)</td><td>제자리 회전</td></tr>
+        <tr><td>ω<sub>L</sub> = 0</td><td>왼쪽 바퀴 (R = L/2)</td><td>바퀴를 핀으로 한 고정축 회전</td></tr>
+        <tr><td>그 밖</td><td>축선 위 R = v<sub>C</sub>/ω</td><td>반지름 R인 원호</td></tr>
+      </tbody></table></div></details>
+    <details><summary>4. 오도메트리와 오차가 쌓이는 이유</summary>
+      <p>로봇청소기는 GPS 없이 바퀴 엔코더가 잰 회전각 Δφ만 더해서 위치를 추정해요 (추측항법, dead reckoning). 매 주기마다 Δs = r(Δφ<sub>L</sub> + Δφ<sub>R</sub>)/2, Δθ = r(Δφ<sub>R</sub> − Δφ<sub>L</sub>)/L̂를 구해 x, y, θ에 더해요.</p>
+      <ul>
+        <li>엔코더 노이즈는 무작위라 일부 상쇄되지만, 바퀴 마모나 바퀴 간격 보정 오차는 매번 같은 방향으로 틀려서 계속 쌓여요 (계통 오차).</li>
+        <li>방향 오차 δθ가 한 번 생기면 이후 거리 s를 갈 때마다 옆으로 약 s·δθ만큼 벗어나요. 그래서 위치 오차는 이동 거리보다 빠르게 커져요.</li>
+        <li>오일러 적분은 한 주기 동안 직선으로 간다고 가정해요. 회전 중에는 실제 원호와 차이가 생기고, 주기 Δt가 길수록 커져요. 원호 적분은 ICR 중심 원호를 그대로 써서 이 오차가 없어요.</li>
+        <li>그래서 실제 로봇청소기는 자이로, 라이다, 카메라로 위치를 보정해요 (SLAM).</li>
+      </ul></details>
+    <details><summary>5. 과제용 실험 아이디어</summary>
+      <ul>
+        <li>오차 요인을 하나만 켜고(예: 바퀴 간격 보정 오차 2%) 지그재그와 나선 청소의 최종 위치 오차를 비교해 보세요.</li>
+        <li>오도메트리 주기 Δt를 10 ms → 200 ms로 바꾸며 오일러, 중점법, 원호 적분의 오차를 비교해 보세요 (오차 요인은 모두 0으로).</li>
+        <li>엔코더 노이즈만 켜고 난수 시드를 여러 번 바꿔 오차가 얼마나 흩어지는지 기록해 보세요.</li>
+        <li>한쪽 바퀴 정지 프리셋에서 ICR이 바퀴 위치와 일치하는지, 계산 흐름의 R 값으로 확인해 보세요.</li>
+      </ul></details>
+    <p class="foot">실제 경로는 5 ms 간격 원호 적분으로 계산해요. 프리셋 명령은 로봇이 공칭값(r, L)으로 미리 계획한 개방 루프 명령이라, 오차가 있으면 실제 경로가 계획에서 벗어나요. 추정 위치는 Δt마다 한 번씩 갱신돼서, 오차가 없어도 그 사이에는 실제보다 살짝 늦게 따라와요. 입력값은 이 브라우저에 저장돼요.</p>
+  </section>
+</main>
+
+<script>
+{
+const $=id=>document.getElementById(id),H=0.005,PI=Math.PI;
+const SPEC=[
+ {k:'wL',g:'drive',lab:'왼쪽 바퀴 각속도 ω<sub>L</sub>',u:'rad/s',min:-15,max:15,st:0.1,v:6,lim:[-100,100]},
+ {k:'wR',g:'drive',lab:'오른쪽 바퀴 각속도 ω<sub>R</sub>',u:'rad/s',min:-15,max:15,st:0.1,v:9,lim:[-100,100]},
+ {k:'r',g:'robot',lab:'바퀴 반지름 r',u:'mm',min:20,max:60,st:1,v:35,lim:[5,200]},
+ {k:'L',g:'robot',lab:'바퀴 간격 L',u:'mm',min:150,max:350,st:1,v:230,lim:[50,1000]},
+ {k:'noise',g:'err',lab:'엔코더 노이즈 σ',u:'%',min:0,max:10,st:0.1,v:1,lim:[0,50]},
+ {k:'rErr',g:'err',lab:'왼쪽 바퀴 마모 (실제 반지름 차이)',u:'%',min:-5,max:5,st:0.1,v:-0.5,lim:[-50,50]},
+ {k:'LErr',g:'err',lab:'바퀴 간격 보정 오차',u:'%',min:-10,max:10,st:0.1,v:2,lim:[-50,50]},
+ {k:'slip',g:'err',lab:'왼쪽 바퀴 미끄러짐',u:'%',min:0,max:15,st:0.5,v:0,lim:[0,90]},
+ {k:'seed',g:'err',lab:'난수 시드',u:'',min:1,max:999,st:1,v:7,lim:[1,1e6]},
+ {k:'dt',g:'odo',lab:'오도메트리 계산 주기 Δt',u:'ms',min:5,max:250,st:5,v:50,lim:[5,1000]},
+ {k:'T',g:'odo',lab:'시뮬레이션 시간',u:'s',min:10,max:120,st:5,v:60,lim:[1,300]}
+];
+const PRE=[
+ {id:'zigzag',n:'지그재그 청소',d:'직진 2 m와 90° 제자리 회전을 반복하는 실제 청소 패턴이에요. 로봇은 반듯하게 그렸다고 믿지만 실제 경로는 점점 틀어져요.'},
+ {id:'spiral',n:'나선 청소',d:'ω<sub>R</sub>은 고정, ω<sub>L</sub>이 서서히 커져 두 바퀴 속도 차이가 줄어요. 그래서 R = v<sub>C</sub>/ω가 커지며 나선이 퍼져요.'},
+ {id:'eight',n:'8자 주행',d:'반지름 0.5 m 좌회전 원 다음 우회전 원. ICR이 로봇 왼쪽에서 오른쪽으로 넘어가요.'},
+ {id:'circle',n:'원 주행',d:'ω<sub>L</sub> ≠ ω<sub>R</sub>로 일정 → ICR이 한 점에 고정되고 반지름 R인 원을 그려요.',w:[6,9]},
+ {id:'straight',n:'직진',d:'ω<sub>L</sub> = ω<sub>R</sub> → ω = 0이라 ICR은 무한원점, 순수 병진이에요.',w:[8,8]},
+ {id:'spin',n:'제자리 회전',d:'ω<sub>L</sub> = −ω<sub>R</sub> → v<sub>C</sub> = 0이라 ICR이 로봇 중심이에요.',w:[-4,4]},
+ {id:'pivot',n:'한쪽 바퀴 정지',d:'ω<sub>L</sub> = 0 → 왼쪽 바퀴가 ICR. 5.2 고정축 회전과 같은 상황이에요.',w:[0,8]},
+ {id:'manual',n:'직접 입력',d:'ω<sub>L</sub>, ω<sub>R</sub> 슬라이더로 직접 조절해요.'}
+];
+const S={P:Object.fromEntries(SPEC.map(s=>[s.k,s.v])),scen:'zigzag',preset:'zigzag',meth:'mid',show:{icr:1,vel:1,dist:1,err:1,tru:1,est:1,prev:0,follow:0}};
+try{const o=JSON.parse(localStorage.getItem('odoSim1')||'null');if(o&&o.P){for(const s of SPEC)if(isFinite(o.P[s.k]))S.P[s.k]=o.P[s.k];if(PRE.some(p=>p.id===o.preset))S.preset=o.preset;if(['zigzag','spiral','eight','manual'].includes(o.scen))S.scen=o.scen;if(['euler','mid','exact'].includes(o.meth))S.meth=o.meth;Object.assign(S.show,o.show||{})}}catch(e){}
+const save=()=>{try{localStorage.setItem('odoSim1',JSON.stringify(S))}catch(e){}};
+const fx=(v,d=3)=>{if(!isFinite(v))return'∞';const z=Math.abs(v)<0.5*10**-d?0:v;return z.toFixed(d).replace('-','−')};
+const wrap=a=>Math.atan2(Math.sin(a),Math.cos(a));
+const nice=v=>{if(!(v>0))return 1;const e=10**Math.floor(Math.log10(v)),m=v/e;return(m<=1?1:m<=2?2:m<=5?5:10)*e};
+let D=null,idx=0,play=false,speed=1,dirty=true,refit=true,changed=true,last=0;
+const cam={x:0,y:0,s:120};
+const cv=$('cv'),ec=$('ec');
+
+/* ---------- controls ---------- */
+const row=s=>`<div class="row"><label for="n-${s.k}">${s.lab}</label><div class="pair"><input type="range" id="r-${s.k}" min="${s.min}" max="${s.max}" step="${s.st}" aria-label="${s.k} 슬라이더"><input type="number" id="n-${s.k}" step="${s.st}" inputmode="decimal"><span class="u">${s.u}</span></div></div>`;
+for(const g of['drive','robot','err','odo'])$('g-'+g).insertAdjacentHTML('beforeend',SPEC.filter(s=>s.g===g).map(row).join(''));
+const syncInputs=()=>SPEC.forEach(s=>{$('r-'+s.k).value=S.P[s.k];$('n-'+s.k).value=S.P[s.k]});
+const chips=()=>{$('chips').innerHTML=PRE.map(p=>`<button class="chip${S.preset===p.id?' on':''}" data-id="${p.id}" aria-pressed="${S.preset===p.id}">${p.n}</button>`).join('');$('pdesc').innerHTML=(PRE.find(p=>p.id===S.preset)||PRE[7]).d;$('pnote').hidden=S.scen==='manual'};
+const cur=()=>D?Math.min(D.N-1,Math.max(0,Math.round(idx))):0;
+SPEC.forEach(s=>{const R=$('r-'+s.k),N=$('n-'+s.k);
+ const set=(v,from)=>{if(!isFinite(v))return;v=Math.min(s.lim[1],Math.max(s.lim[0],v));if(s.k==='seed')v=Math.round(v);
+  if((s.k==='wL'||s.k==='wR')&&S.scen!=='manual'&&D){const i=cur();S.P.wL=+D.wl[i].toFixed(1);S.P.wR=+D.wr[i].toFixed(1);S.scen='manual';syncInputs()}
+  if(s.k==='wL'||s.k==='wR'){S.preset='manual';chips()}
+  S.P[s.k]=v;if(from!=='r')R.value=v;if(from!=='n')N.value=v;dirty=true;save()};
+ R.addEventListener('input',()=>set(+R.value,'r'));
+ N.addEventListener('input',()=>{if(N.value!=='')set(+N.value,'n')});
+ N.addEventListener('change',()=>{N.value=S.P[s.k]});
+});
+$('chips').addEventListener('click',e=>{const b=e.target.closest('.chip');if(!b)return;const p=PRE.find(q=>q.id===b.dataset.id);S.preset=p.id;
+ if(p.w){S.scen='manual';S.P.wL=p.w[0];S.P.wR=p.w[1];syncInputs()}else S.scen=p.id;
+ idx=0;play=true;dirty=true;refit=true;chips();setPlay();save()});
+$('meth').value=S.meth;$('meth').addEventListener('change',e=>{S.meth=e.target.value;dirty=true;save()});
+document.querySelectorAll('#tog input').forEach(c=>{c.checked=!!S.show[c.dataset.k];c.addEventListener('change',()=>{S.show[c.dataset.k]=c.checked?1:0;changed=true;save()})});
+syncInputs();chips();
+
+/* ---------- simulation ---------- */
+const mulberry=a=>()=>{a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296};
+const arc=(x,y,th,ds,dq)=>{if(Math.abs(dq)<1e-9)return[x+ds*Math.cos(th),y+ds*Math.sin(th),th+dq];const R=ds/dq,t2=th+dq;return[x+R*(Math.sin(t2)-Math.sin(th)),y-R*(Math.cos(t2)-Math.cos(th)),t2]};
+function plan(id,r,L){
+ const v0=0.25,ws=v0/r,wt=4,Om=2*r*wt/L,seg=[];
+ const st=d=>seg.push({d:d/v0,l:ws,r:ws}),tn=deg=>seg.push({d:Math.abs(deg)*PI/180/Om,l:deg>0?-wt:wt,r:deg>0?wt:-wt});
+ if(id==='zigzag')for(let k=0;k<20;k++){const s=k%2?-1:1;st(2);tn(90*s);st(0.3);tn(90*s)}
+ if(id==='eight'){const w0=7,R=0.5,d=w0*L/(2*R),tc=2*PI/(r*2*d/L);for(let k=0;k<20;k++){seg.push({d:tc,l:w0-d,r:w0+d});seg.push({d:tc,l:w0+d,r:w0-d})}}
+ return seg;
+}
+function simulate(){
+ const P=S.P,r=P.r/1000,L=P.L/1000,rL=r*(1+P.rErr/100),sl=P.slip/100,Ls=L*(1+P.LErr/100),sg=P.noise/100;
+ const N=Math.max(2,Math.round(P.T/H)+1),no=Math.max(1,Math.round(P.dt/1000/H)),A=()=>new Float64Array(N);
+ const d={N,no,r,L,rL,sl,Ls,tx:A(),ty:A(),tt:A(),ex:A(),ey:A(),et:A(),wl:A(),wr:A(),vl:A(),vr:A(),ep:A(),eh:A(),oml:A(),omr:A(),ods:A(),odt:A(),opx:A(),opy:A(),opt:A(),ot:A(),ui:A()};
+ const O=[d.oml,d.omr,d.ods,d.odt,d.opx,d.opy,d.opt,d.ot];
+ const rnd=mulberry(Math.round(P.seed)||1),gs=()=>{let u=0;while(!u)u=rnd();return Math.sqrt(-2*Math.log(u))*Math.cos(2*PI*rnd())};
+ const seg=plan(S.scen,r,L);let si=0,s0=0;
+ const cmd=t=>{if(S.scen==='manual')return[P.wL,P.wR];if(S.scen==='spiral')return[8-7*Math.exp(-t/12),8];
+  while(si<seg.length&&t>=s0+seg[si].d-1e-12){s0+=seg[si].d;si++}return si<seg.length?[seg[si].l,seg[si].r]:[0,0]};
+ let u=0,x=0,y=0,th=0,X=0,Y=0,TH=0,aL=0,aR=0,c=0,lo=[0,0,0,0,0,0,0,-1],pm=0,hm=0,b=[0,0,0,0];
+ for(let i=0;i<N;i++){
+  const t=i*H,w=cmd(t),vl=rL*w[0]*(1-sl),vr=r*w[1];
+  d.tx[i]=x;d.ty[i]=y;d.tt[i]=th;d.ex[i]=X;d.ey[i]=Y;d.et[i]=TH;d.wl[i]=w[0];d.wr[i]=w[1];d.vl[i]=vl;d.vr[i]=vr;
+  for(let k=0;k<8;k++)O[k][i]=lo[k];
+  d.ui[i]=u;const ep=Math.hypot(d.tx[u]-X,d.ty[u]-Y)*100,eh=wrap(TH-d.tt[u])*180/PI;d.ep[i]=ep;d.eh[i]=eh;pm=Math.max(pm,ep);hm=Math.max(hm,Math.abs(eh));
+  b=[Math.min(b[0],x,X),Math.min(b[1],y,Y),Math.max(b[2],x,X),Math.max(b[3],y,Y)];
+  [x,y,th]=arc(x,y,th,(vl+vr)/2*H,(vr-vl)/L*H);
+  aL+=w[0]*H;aR+=w[1]*H;
+  if(++c===no){const ml=aL*(1+sg*gs()),mr=aR*(1+sg*gs()),ds=r*(ml+mr)/2,dq=r*(mr-ml)/Ls;
+   lo=[ml,mr,ds,dq,X,Y,TH,t+H];
+   if(S.meth==='euler'){X+=ds*Math.cos(TH);Y+=ds*Math.sin(TH);TH+=dq}
+   else if(S.meth==='mid'){X+=ds*Math.cos(TH+dq/2);Y+=ds*Math.sin(TH+dq/2);TH+=dq}
+   else[X,Y,TH]=arc(X,Y,TH,ds,dq);
+   aL=aR=c=0;u=i+1}
+ }
+ d.pm=pm;d.hm=hm;d.b=b;D=d;
+}
+const kin=i=>{const vl=D.vl[i],vr=D.vr[i],v=(vl+vr)/2,w=(vr-vl)/D.L;return{vl,vr,v,w,R:Math.abs(w)<1e-6?Infinity:v/w}};
+
+/* ---------- canvas helpers ---------- */
+function sizeCanvas(c){const dpr=Math.min(2,window.devicePixelRatio||1),w=c.clientWidth,h=c.clientHeight;
+ if(c.width!==Math.round(w*dpr)||c.height!==Math.round(h*dpr)){c.width=Math.round(w*dpr);c.height=Math.round(h*dpr)}
+ const g=c.getContext('2d');g.setTransform(dpr,0,0,dpr,0,0);return[g,w,h]}
+function fit(){if(!D)return;const W=cv.clientWidth,Hh=cv.clientHeight;if(W<20||Hh<20)return;const b=D.b,pad=0.5;
+ const bw=Math.max(1.2,b[2]-b[0]+2*pad),bh=Math.max(1.2,b[3]-b[1]+2*pad);cam.s=Math.min(W/bw,Hh/bh,420);cam.x=(b[0]+b[2])/2;cam.y=(b[1]+b[3])/2}
+function drawMain(i){
+ const[g,W,Hh]=sizeCanvas(cv);if(W<10)return;
+ if(S.show.follow){cam.x=D.tx[i];cam.y=D.ty[i]}
+ const s=cam.s,X=x=>W/2+(x-cam.x)*s,Y=y=>Hh/2-(y-cam.y)*s,F='12px "Noto Sans KR",sans-serif';
+ g.fillStyle='#16191c';g.fillRect(0,0,W,Hh);
+ const gs=[0.05,0.1,0.25,0.5,1,2,5,10,20,50].find(v=>v*s>=60)||50,dg=gs<1?2:0;
+ const x0=cam.x-W/2/s,x1=cam.x+W/2/s,y0=cam.y-Hh/2/s,y1=cam.y+Hh/2/s;g.lineWidth=1;g.font=F;
+ for(let v=Math.ceil(x0/gs)*gs;v<=x1;v+=gs){const p=Math.round(X(v))+.5;g.strokeStyle=Math.abs(v)<gs/1e3?'#3b434b':'#22282d';g.beginPath();g.moveTo(p,0);g.lineTo(p,Hh);g.stroke();if(p<W-70){g.fillStyle='#69747e';g.textAlign='left';g.fillText(fx(v,dg)+' m',p+4,Hh-8)}}
+ for(let v=Math.ceil(y0/gs)*gs;v<=y1;v+=gs){const p=Math.round(Y(v))+.5;g.strokeStyle=Math.abs(v)<gs/1e3?'#3b434b':'#22282d';g.beginPath();g.moveTo(0,p);g.lineTo(W,p);g.stroke();if(p>60&&p<Hh-28){g.fillStyle='#69747e';g.textAlign='right';g.fillText(fx(v,dg)+' m',W-8,p-4)}}
+ const path=(ax,ay,n,col,dash,lw)=>{g.strokeStyle=col;g.lineWidth=lw;g.setLineDash(dash);g.beginPath();const st=Math.max(1,Math.floor(D.N/5000));
+  for(let k=0;k<=n;k+=st){k?g.lineTo(X(ax[k]),Y(ay[k])):g.moveTo(X(ax[k]),Y(ay[k]))}g.lineTo(X(ax[n]),Y(ay[n]));g.stroke();g.setLineDash([])};
+ if(S.show.prev){path(D.tx,D.ty,D.N-1,'rgba(79,193,176,.25)',[4,6],1.2);path(D.ex,D.ey,D.N-1,'rgba(255,138,92,.22)',[4,6],1.2)}
+ if(S.show.tru)path(D.tx,D.ty,i,'#4fc1b0',[],2.2);
+ if(S.show.est)path(D.ex,D.ey,i,'#ff8a5c',[8,5],2);
+ const x=D.tx[i],y=D.ty[i],th=D.tt[i],c=Math.cos(th),sn=Math.sin(th),lx=-sn,ly=c,Lh=D.L/2,Rb=Lh+0.045;
+ if(S.show.err&&D.ep[i]>0.3){g.strokeStyle='rgba(238,241,243,.75)';g.lineWidth=1.2;g.setLineDash([2,3]);g.beginPath();g.moveTo(X(x),Y(y));g.lineTo(X(D.ex[i]),Y(D.ey[i]));g.stroke();g.setLineDash([]);
+  g.fillStyle='#ffb89c';g.textAlign='left';g.font=F;g.fillText('오차 '+fx(D.ep[i],1)+' cm',X(D.ex[i])+Rb*s+8,Y(D.ey[i])-Rb*s-4)}
+ const rob=(x,y,th,ghost)=>{const c=Math.cos(th),sn=Math.sin(th),cx=X(x),cy=Y(y),P=(u,v)=>[X(x+u*c-v*sn),Y(y+u*sn+v*c)];
+  g.beginPath();g.arc(cx,cy,Rb*s,0,2*PI);
+  if(ghost){g.setLineDash([6,5]);g.strokeStyle='#ff8a5c';g.lineWidth=1.5;g.stroke();g.setLineDash([])}
+  else{g.fillStyle='rgba(40,46,52,.94)';g.fill();g.strokeStyle='#d5dbe0';g.lineWidth=1.5;g.stroke();
+   if(Rb*s>8){g.beginPath();g.arc(cx,cy,Rb*s-3,-th-0.9,-th+0.9);g.lineWidth=4;g.strokeStyle='#66717b';g.stroke()}
+   for(const sd of[1,-1]){const v=sd*Lh,q=[P(D.r,v-0.012),P(D.r,v+0.012),P(-D.r,v+0.012),P(-D.r,v-0.012)];g.beginPath();q.forEach((p,k)=>k?g.lineTo(p[0],p[1]):g.moveTo(p[0],p[1]));g.closePath();g.fillStyle='#aab4bc';g.fill()}
+   const a=P(0,Lh),bq=P(0,-Lh);g.setLineDash([3,4]);g.strokeStyle='#66717b';g.lineWidth=1;g.beginPath();g.moveTo(a[0],a[1]);g.lineTo(bq[0],bq[1]);g.stroke();g.setLineDash([])}
+  const h=P(Rb*0.72,0);g.strokeStyle=ghost?'#ff8a5c':'#d5dbe0';g.lineWidth=2;g.beginPath();g.moveTo(cx,cy);g.lineTo(h[0],h[1]);g.stroke();
+  g.beginPath();g.arc(cx,cy,3,0,2*PI);g.fillStyle=ghost?'#ff8a5c':'#eef1f3';g.fill()};
+ if(S.show.est)rob(D.ex[i],D.ey[i],D.et[i],true);
+ const k=kin(i),pts=[[x+lx*Lh,y+ly*Lh,k.vl,'vL'],[x-lx*Lh,y-ly*Lh,k.vr,'vR'],[x,y,k.v,'vC']];
+ const mv=Math.max(Math.abs(k.vl),Math.abs(k.vr),1e-4);let ks=1;if(mv*ks*s>130)ks=130/(mv*s);if(mv*ks*s<36)ks=36/(mv*s);
+ const tip=p=>[p[0]+c*p[2]*ks,p[1]+sn*p[2]*ks],line=(a,b,col,lw,dash)=>{g.strokeStyle=col;g.lineWidth=lw;g.setLineDash(dash);g.beginPath();g.moveTo(X(a[0]),Y(a[1]));g.lineTo(X(b[0]),Y(b[1]));g.stroke();g.setLineDash([])};
+ const fin=isFinite(k.R),ic=fin?[x+lx*k.R,y+ly*k.R]:null;
+ if(S.show.dist&&(Math.abs(k.vl)>1e-5||Math.abs(k.vr)>1e-5)){if(fin){line(ic,tip(pts[0]),'rgba(134,182,255,.6)',1.2,[5,4]);line(ic,tip(pts[1]),'rgba(134,182,255,.6)',1.2,[5,4])}
+  else{const a=tip(pts[0]),bq=tip(pts[1]),ex=[(a[0]-bq[0])*0.6,(a[1]-bq[1])*0.6];line([a[0]+ex[0],a[1]+ex[1]],[bq[0]-ex[0],bq[1]-ex[1]],'rgba(134,182,255,.6)',1.2,[5,4])}}
+ if(S.show.icr&&fin){line(ic,pts[0],'rgba(255,74,61,.75)',1.3,[6,4]);line(ic,pts[1],'rgba(255,74,61,.75)',1.3,[6,4])}
+ rob(x,y,th,false);
+ if(S.show.vel){g.font=F;for(const p of pts){const t=tip(p),a=X(p[0]),b=Y(p[1]),cx2=X(t[0]),cy2=Y(t[1]),Ln=Math.hypot(cx2-a,cy2-b);if(Ln<3)continue;
+  const col=p[3]==='vC'?'#d5dbe0':'#86b6ff';g.strokeStyle=col;g.fillStyle=col;g.lineWidth=2.4;g.beginPath();g.moveTo(a,b);g.lineTo(cx2,cy2);g.stroke();
+  const an=Math.atan2(cy2-b,cx2-a),hs=Math.min(10,Ln*0.45);g.beginPath();g.moveTo(cx2,cy2);g.lineTo(cx2-hs*Math.cos(an-0.42),cy2-hs*Math.sin(an-0.42));g.lineTo(cx2-hs*Math.cos(an+0.42),cy2-hs*Math.sin(an+0.42));g.closePath();g.fill();
+  g.textAlign='left';g.fillText(p[3],cx2+6,cy2-6)}}
+ if(S.show.icr){g.font='600 13px "Noto Sans KR",sans-serif';g.textAlign='left';g.fillStyle='#ff4a3d';
+  if(!fin){g.fillText('ICR → ∞ (순수 병진)',X(x)+Rb*s+10,Y(y)-Rb*s-6)}
+  else{const sx=X(ic[0]),sy=Y(ic[1]);
+   if(sx>=10&&sx<=W-10&&sy>=10&&sy<=Hh-10){g.beginPath();g.arc(sx,sy,6,0,2*PI);g.fill();g.strokeStyle='#16191c';g.lineWidth=2;g.stroke();g.fillText('ICR',sx+10,sy-10)}
+   else{const rx=X(x),ry=Y(y),dx=sx-rx,dy=sy-ry,m=24;const tm=Math.min(dx>0?(W-m-rx)/dx:dx<0?(m-rx)/dx:Infinity,dy>0?(Hh-m-ry)/dy:dy<0?(m-ry)/dy:Infinity);
+    if(tm>0&&isFinite(tm)){const ex=rx+dx*tm,ey=ry+dy*tm,an=Math.atan2(dy,dx);g.beginPath();g.moveTo(ex+9*Math.cos(an),ey+9*Math.sin(an));g.lineTo(ex-7*Math.cos(an-0.6),ey-7*Math.sin(an-0.6));g.lineTo(ex-7*Math.cos(an+0.6),ey-7*Math.sin(an+0.6));g.closePath();g.fill();
+     const lab='ICR '+fx(Math.abs(k.R),2)+' m';g.textAlign=ex>W/2?'right':'left';g.fillText(lab,ex+(ex>W/2?-12:12),ey+(ey>Hh/2?-12:20))}}}}
+}
+function drawErr(i){
+ const[g,W,Hh]=sizeCanvas(ec);g.clearRect(0,0,W,Hh);const narrow=W<520,L=48,R=narrow?12:48,T=10,B=26,pw=W-L-R,ph=Hh-T-B;if(pw<40)return;
+ const tm=(D.N-1)*H,pm=nice(D.pm||1),hm=nice(D.hm||1),xs=t=>L+t/tm*pw,yp=v=>T+ph-v/pm*ph,yh=v=>T+ph-v/hm*ph;
+ g.font='12px "Noto Sans KR",sans-serif';g.lineWidth=1;
+ for(let k=0;k<=4;k++){const y=Math.round(T+ph*k/4)+.5;g.strokeStyle='#2a3036';g.beginPath();g.moveTo(L,y);g.lineTo(L+pw,y);g.stroke();g.fillStyle='#8b959e';
+  g.textAlign='right';g.fillText(fx(pm*(1-k/4),pm<4?1:0),L-6,y+4);if(!narrow){g.textAlign='left';g.fillStyle='#a98fd0';g.fillText(fx(hm*(1-k/4),hm<4?1:0)+'°',L+pw+6,y+4)}}
+ const xt=nice(tm/(narrow?4:8));g.fillStyle='#8b959e';g.textAlign='center';for(let t=0;t<=tm+1e-9;t+=xt)g.fillText(fx(t,xt<1?1:0)+' s',xs(t),Hh-6);
+ const st=Math.max(1,Math.floor(D.N/1500));
+ const ser=(arr,f,col,abs)=>{for(const[n,al]of[[D.N-1,.22],[i,1]]){g.globalAlpha=al;g.strokeStyle=col;g.lineWidth=2;g.beginPath();for(let k=0;k<=n;k+=st){const v=abs?Math.abs(arr[k]):arr[k];k?g.lineTo(xs(k*H),f(v)):g.moveTo(xs(0),f(v))}g.lineTo(xs(n*H),f(abs?Math.abs(arr[n]):arr[n]));g.stroke()}g.globalAlpha=1};
+ ser(D.eh,yh,'#c79bff',true);ser(D.ep,yp,'#eef1f3',false);
+ const cx=Math.round(xs(i*H))+.5;g.strokeStyle='#86b6ff';g.setLineDash([3,3]);g.beginPath();g.moveTo(cx,T);g.lineTo(cx,T+ph);g.stroke();g.setLineDash([]);
+ g.fillStyle='#eef1f3';g.beginPath();g.arc(xs(i*H),yp(D.ep[i]),4,0,2*PI);g.fill();g.fillStyle='#c79bff';g.beginPath();g.arc(xs(i*H),yh(Math.abs(D.eh[i])),4,0,2*PI);g.fill();
+}
+
+/* ---------- text panels ---------- */
+function hud(i){const k=kin(i);$('hud').innerHTML=`<span>시나리오</span><b>${(PRE.find(p=>p.id===S.preset)||PRE[7]).n}</b><span>중심 속도 v<sub>C</sub></span><b>${fx(k.v,3)} m/s</b><span>각속도 ω</span><b>${fx(k.w,3)} rad/s</b><span>ICR 거리 R</span><b style="color:var(--icr)">${isFinite(k.R)?fx(k.R,3)+' m':'∞'}</b><span>위치 오차</span><b style="color:var(--est)">${fx(D.ep[i],1)} cm</b>`}
+function flow(i){
+ const P=S.P,k=kin(i),wl=D.wl[i],wr=D.wr[i],Lm=D.L,dir=w=>w>1e-6?'반시계(CCW)':w<-1e-6?'시계(CW)':'회전 없음';
+ const s1=`<p class="eq">v<sub>L</sub> = r<sub>L</sub>(1 − s)ω<sub>L</sub> = ${fx(D.rL,4)} × (1 − ${fx(D.sl,3)}) × ${fx(wl,2)} = <b>${fx(k.vl,3)} m/s</b></p>
+  <p class="eq">v<sub>R</sub> = r·ω<sub>R</sub> = ${fx(D.r,4)} × ${fx(wr,2)} = <b>${fx(k.vr,3)} m/s</b></p>
+  <p class="sm">미끄러지지 않으면 바닥 접지점 속도가 0이라 바퀴 축 속도는 rω예요 (5.3 구름 조건).${P.rErr?` 왼쪽 바퀴는 마모로 실제 반지름이 ${fx(D.rL*1000,2)} mm예요.`:''}${D.sl?` 미끄러짐 ${fx(D.sl*100,1)}%만큼 덜 나가요.`:''}</p>`;
+ const s2=`<p class="eq">ω = (v<sub>R</sub> − v<sub>L</sub>) / L = (${fx(k.vr,3)} − ${fx(k.vl,3)}) / ${fx(Lm,3)} = <b>${fx(k.w,3)} rad/s</b>, ${dir(k.w)}</p>
+  <p class="eq">v<sub>C</sub> = (v<sub>L</sub> + v<sub>R</sub>) / 2 = <b>${fx(k.v,3)} m/s</b></p>
+  <p class="sm">두 바퀴는 같은 강체 위 두 점 → v<sub>R</sub> = v<sub>L</sub> + ω × r<sub>R/L</sub>. 검산: v<sub>L</sub> + ω·L/2 = ${fx(k.vl+k.w*Lm/2,3)} = v<sub>C</sub> ✓</p>`;
+ let s3;
+ if(!isFinite(k.R))s3=`<p class="eq">ω = 0 → v<sub>L</sub> = v<sub>R</sub>: 두 속도가 평행하고 크기도 같아요.</p><p class="eq"><b class="r">ICR → 무한원점</b> (그 순간 순수 병진)</p><p class="sm">슬라이드 p.14 (b)처럼 화살표 끝을 이은 선이 바퀴 축과 평행해서 만나지 않아요.</p>`;
+ else{const a=k.R-Lm/2,b=k.R+Lm/2;let ex='';
+  if(Math.abs(k.v)<1e-5)ex=' v<sub>C</sub> = 0 → ICR = 로봇 중심, 제자리 회전이에요.';else if(Math.abs(k.vl)<1e-5)ex=' v<sub>L</sub> = 0 → 왼쪽 바퀴가 ICR, 고정 핀처럼 돌아요 (5.2).';else if(Math.abs(k.vr)<1e-5)ex=' v<sub>R</sub> = 0 → 오른쪽 바퀴가 ICR이에요.';
+  s3=`<p class="eq">R = v<sub>C</sub> / ω = ${fx(k.v,3)} / ${fx(k.w,3)} = <b class="r">${fx(k.R,3)} m</b></p>
+  <p class="sm">ICR은 로봇 중심에서 바퀴 축을 따라 ${k.R>=0?'왼쪽':'오른쪽'}으로 ${fx(Math.abs(k.R),3)} m.${ex}</p>
+  <p class="eq">v<sub>L</sub>/(R − L/2) = ${Math.abs(a)>1e-6?fx(k.vl/a,3):'—'}, &nbsp;v<sub>R</sub>/(R + L/2) = ${Math.abs(b)>1e-6?fx(k.vr/b,3):'—'}</p>
+  <p class="sm">속도는 ICR로부터 거리에 비례 (5.5) → 두 값 모두 ω와 같아요.</p>`}
+ let s4;const ot=D.ot[i];
+ if(ot<0)s4='<p class="sm">아직 첫 오도메트리 업데이트 전이에요. 재생하거나 스텝을 눌러 보세요.</p>';
+ else{const ml=D.oml[i],mr=D.omr[i],ds=D.ods[i],dq=D.odt[i],px=D.opx[i],py=D.opy[i],pt=D.opt[i],m=S.meth;let nx,ny,ex1,ey1;
+  if(m==='exact'&&Math.abs(dq)>1e-9){const R=ds/dq;nx=px+R*(Math.sin(pt+dq)-Math.sin(pt));ny=py-R*(Math.cos(pt+dq)-Math.cos(pt));
+   ex1=`${fx(px,4)} + (${fx(ds,4)}/${fx(dq,5)})[sin(${fx(pt+dq,4)}) − sin(${fx(pt,4)})]`;ey1=`${fx(py,4)} − (${fx(ds,4)}/${fx(dq,5)})[cos(${fx(pt+dq,4)}) − cos(${fx(pt,4)})]`}
+  else{const a=m==='mid'?pt+dq/2:pt;nx=px+ds*Math.cos(a);ny=py+ds*Math.sin(a);ex1=`${fx(px,4)} + ${fx(ds,4)}·cos(${fx(a,4)})`;ey1=`${fx(py,4)} + ${fx(ds,4)}·sin(${fx(a,4)})`}
+  s4=`<p class="sm">마지막 업데이트 t = ${fx(ot,2)} s (주기 ${P.dt} ms). 로봇은 엔코더 값과 자기 설정값 r = ${fx(D.r*1000,1)} mm, L̂ = ${fx(D.Ls*1000,1)} mm만 알아요.</p>
+  <p class="eq">Δφ<sub>L</sub> = ${fx(ml,4)} rad, Δφ<sub>R</sub> = ${fx(mr,4)} rad (엔코더)</p>
+  <p class="eq">Δs = r(Δφ<sub>L</sub> + Δφ<sub>R</sub>)/2 = <b>${fx(ds*1000,2)} mm</b></p>
+  <p class="eq">Δθ = r(Δφ<sub>R</sub> − Δφ<sub>L</sub>)/L̂ = <b>${fx(dq,5)} rad</b></p>
+  <p class="eq">x̂ ← ${ex1} = <b>${fx(nx,4)} m</b></p>
+  <p class="eq">ŷ ← ${ey1} = <b>${fx(ny,4)} m</b></p>
+  <p class="eq">θ̂ ← ${fx(pt,4)} + ${fx(dq,5)} = <b>${fx(pt+dq,4)} rad</b></p>`}
+ const St=[['① 바퀴 속도','5.2 고정축 회전 · 5.3 구름 조건',s1],['② 로봇 각속도와 중심 속도','5.4 상대속도',s2],['③ 순간중심 ICR','5.5 바퀴 축 연장선 위',s3],['④ 오도메트리 업데이트','로봇이 아는 값만으로 위치 추정',s4]];
+ $('steps').innerHTML=St.map(s=>`<div class="step"><h3>${s[0]}</h3><p class="tg">${s[1]}</p>${s[2]}</div>`).join('');
+}
+function cmp(i){const dg=v=>v*180/PI,u=D.ui[i],tt=D.tt[u],et=D.et[i];
+ const R=[['x (m)',D.tx[u],D.ex[i],D.ex[i]-D.tx[u],4],['y (m)',D.ty[u],D.ey[i],D.ey[i]-D.ty[u],4],['θ (°)',dg(wrap(tt)),dg(wrap(et)),D.eh[i],2]];
+ $('cmp').innerHTML=R.map(r=>`<tr><td>${r[0]}</td><td>${fx(r[1],r[4])}</td><td>${fx(r[2],r[4])}</td><td>${fx(r[3],r[4])}</td></tr>`).join('')+`<tr><td>위치 오차</td><td></td><td></td><td style="color:var(--est)">${fx(D.ep[i],2)} cm</td></tr>`}
+function render(){const i=cur();drawMain(i);hud(i);flow(i);drawErr(i);cmp(i);
+ $('scrub').value=Math.round(i/(D.N-1)*1000);$('time').textContent=`t = ${(i*H).toFixed(2)} s / ${((D.N-1)*H).toFixed(0)} s`;
+ if(S.scen!=='manual')for(const k of['wL','wR']){const v=(k==='wL'?D.wl[i]:D.wr[i]).toFixed(2);if(document.activeElement!==$('n-'+k))$('n-'+k).value=v;$('r-'+k).value=v}}
+
+/* ---------- playback & interaction ---------- */
+const setPlay=()=>{$('bp').textContent=play?'❚❚ 일시정지':'▶ 재생'};
+const step=n=>{play=false;setPlay();idx=Math.min(D.N-1,Math.max(0,cur()+n*D.no));changed=true};
+$('bp').addEventListener('click',()=>{if(!play&&cur()>=D.N-1)idx=0;play=!play;setPlay();changed=true});
+$('b0').addEventListener('click',()=>{idx=0;play=false;setPlay();changed=true});
+$('bm').addEventListener('click',()=>step(-1));$('bf').addEventListener('click',()=>step(1));
+$('spd').addEventListener('change',e=>{speed=+e.target.value});
+$('scrub').addEventListener('input',e=>{idx=+e.target.value/1000*(D.N-1);changed=true});
+$('fitb').addEventListener('click',()=>{S.show.follow=0;$('t-follow').checked=false;fit();changed=true});
+const zoom=f=>{cam.s=Math.min(4000,Math.max(8,cam.s*f));changed=true};
+$('zin').addEventListener('click',()=>zoom(1.3));$('zout').addEventListener('click',()=>zoom(1/1.3));
+cv.addEventListener('wheel',e=>{e.preventDefault();const rc=cv.getBoundingClientRect(),mx=e.clientX-rc.left-rc.width/2,my=e.clientY-rc.top-rc.height/2,wx=cam.x+mx/cam.s,wy=cam.y-my/cam.s;
+ cam.s=Math.min(4000,Math.max(8,cam.s*Math.exp(-e.deltaY*0.0015)));if(!S.show.follow){cam.x=wx-mx/cam.s;cam.y=wy+my/cam.s}changed=true},{passive:false});
+let drag=null;
+cv.addEventListener('pointerdown',e=>{drag={x:e.clientX,y:e.clientY,cx:cam.x,cy:cam.y,m:false};cv.setPointerCapture(e.pointerId)});
+cv.addEventListener('pointermove',e=>{if(!drag)return;const dx=e.clientX-drag.x,dy=e.clientY-drag.y;if(!drag.m&&Math.hypot(dx,dy)<4)return;
+ if(!drag.m){drag.m=true;cv.style.cursor='grabbing';if(S.show.follow){S.show.follow=0;$('t-follow').checked=false}}cam.x=drag.cx-dx/cam.s;cam.y=drag.cy+dy/cam.s;changed=true});
+const up=()=>{drag=null;cv.style.cursor=''};cv.addEventListener('pointerup',up);cv.addEventListener('pointercancel',up);
+cv.addEventListener('dblclick',()=>{fit();changed=true});
+document.addEventListener('keydown',e=>{const t=e.target.tagName;if(t==='INPUT'||t==='SELECT'||t==='TEXTAREA')return;
+ if(e.code==='Space'&&t!=='BUTTON'){e.preventDefault();$('bp').click()}else if(e.key==='ArrowRight')step(1);else if(e.key==='ArrowLeft')step(-1)});
+const ro=new ResizeObserver(()=>{changed=true});ro.observe(cv);ro.observe(ec);
+
+function loop(ts){const dtr=last?Math.min(0.1,(ts-last)/1000):0;last=ts;
+ if(dirty){simulate();dirty=false;changed=true;if(idx>D.N-1)idx=D.N-1}
+ if(refit&&cv.clientWidth>20){fit();refit=false;changed=true}
+ if(play){idx+=dtr*speed/H;if(idx>=D.N-1){idx=D.N-1;play=false;setPlay()}changed=true}
+ if(changed&&D){render();changed=false}
+ requestAnimationFrame(loop)}
+simulate();dirty=false;idx=Math.round((D.N-1)*0.4);setPlay();
+requestAnimationFrame(loop);
+}
+</script>
+</body>
+</html>
